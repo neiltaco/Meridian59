@@ -12,7 +12,7 @@
 // Returns delta time in seconds.
 float GetDeltaTime();
 
-// Initializes the clock state. Should be called once before the clock is first refreshed.
+// Initializes the clock state. Should be called once at startup.
 void InitializeTime();
 
 // Refreshes the clock state. Should be called once at the start of each frame.
