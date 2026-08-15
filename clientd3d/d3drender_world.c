@@ -172,19 +172,39 @@ void D3DRenderWorldLighting(const WorldRenderParams &worldRenderParams,
       IDirect3DDevice9_SetRenderState(gpD3DDevice, D3DRS_FILLMODE, D3DFILL_SOLID);
       D3DCacheFlush(cacheSystem.lMapCacheSystemStatic, pools.lMapPoolStatic, 2, D3DPT_TRIANGLESTRIP);
 
+      // Flickering lights belong with the room's own lighting, which adds onto the world.
+      LightAndTextureParams flickerParams = lightAndTextureParams;
+      flickerParams.lightCacheDynamic = lightAndTextureParams.lightCacheFlicker;
+
       D3DRenderPoolReset(pools.lMapPool, &D3DMaterialLMapDynamicPool);
 
       D3DRenderLMapsPostDraw(worldRenderParams, lightAndTextureParams, room.tree, false);
-      D3DRenderLMapsDynamicPostDraw(worldRenderParams, lightAndTextureParams, room.tree, false);
+      D3DRenderLMapsDynamicPostDraw(worldRenderParams, flickerParams, room.tree, false);
 
       IDirect3DDevice9_SetRenderState(gpD3DDevice, D3DRS_ZWRITEENABLE, FALSE);  // Disable depth writing
       D3DRender_SetAlphaTestState(TRUE, alpha_test_threshold, D3DCMP_GREATEREQUAL);
 
       D3DRenderLMapsPostDraw(worldRenderParams, lightAndTextureParams, room.tree, true);
-      D3DRenderLMapsDynamicPostDraw(worldRenderParams, lightAndTextureParams, room.tree, true);
+      D3DRenderLMapsDynamicPostDraw(worldRenderParams, flickerParams, room.tree, true);
 
       D3DCacheFill(cacheSystem.lMapCacheSystem, pools.lMapPool, 2);
       D3DCacheFlush(cacheSystem.lMapCacheSystem, pools.lMapPool, 2, D3DPT_TRIANGLESTRIP);
+
+      // Moving lights take the maximum rather than adding, which bounds a surface at the
+      // brightest single one of them so that a crowd of light-emitting monsters cannot sum to
+      // solid white. Costs a second walk of the tree, so it is skipped when the room has none.
+      if (lightAndTextureParams.lightCacheDynamic->numLights > 0)
+      {
+         D3DRenderPoolReset(pools.lMapPool, &D3DMaterialLMapDynamicPool);
+
+         D3DRenderLMapsDynamicPostDraw(worldRenderParams, lightAndTextureParams, room.tree, false);
+         D3DRenderLMapsDynamicPostDraw(worldRenderParams, lightAndTextureParams, room.tree, true);
+
+         D3DCacheFill(cacheSystem.lMapCacheSystemMoving, pools.lMapPool, 2);
+         IDirect3DDevice9_SetRenderState(gpD3DDevice, D3DRS_BLENDOP, D3DBLENDOP_MAX);
+         D3DCacheFlush(cacheSystem.lMapCacheSystemMoving, pools.lMapPool, 2, D3DPT_TRIANGLESTRIP);
+         IDirect3DDevice9_SetRenderState(gpD3DDevice, D3DRS_BLENDOP, D3DBLENDOP_ADD);
+      }
 
       // Restore states for subsequent rendering
       IDirect3DDevice9_SetRenderState(gpD3DDevice, D3DRS_ZWRITEENABLE, TRUE);  // Restore depth writing

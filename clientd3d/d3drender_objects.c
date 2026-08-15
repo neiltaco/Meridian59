@@ -2416,6 +2416,36 @@ void D3DRenderPlayerOverlayOverlaysDraw(
 }
 
 /**
+* Narrows closestLight to the nearest light in the cache, if any of them beats what is already
+* there. Distance is measured in units of each light's own half radius, so a large light wins over
+* a small one that is nearer.
+*/
+static void UpdateClosestLight(d_light_cache* pDLightCache, const room_contents_node* pRNode,
+	float& closestDistance, d_light*& closestLight)
+{
+	for (int numLights = 0; numLights < pDLightCache->numLights; numLights++)
+	{
+		d_light* pLight = &pDLightCache->dLights[numLights];
+		custom_xyz vector;
+
+		vector.x = pRNode->motion.x - pLight->xyz.x;
+		vector.y = pRNode->motion.y - pLight->xyz.y;
+		vector.z = pRNode->motion.z - pLight->xyz.z;
+
+		float distance = (vector.x * vector.x) + (vector.y * vector.y) + (vector.z * vector.z);
+		distance = (float)sqrt((double)distance);
+
+		distance /= (pLight->xyzScale.x / 2.0f);
+
+		if (distance < closestDistance)
+		{
+			closestDistance = distance;
+			closestLight = pLight;
+		}
+	}
+}
+
+/**
 * Lighting calculations for world objects.
 */
 bool D3DObjectLightingCalc(
@@ -2426,55 +2456,17 @@ bool D3DObjectLightingCalc(
 	bool fogEnabled,
 	const LightAndTextureParams& lightAndTextureParams)
 {
-	int			light, intDistance, numLights;
+	int			light, intDistance;
 	d_light* pDLight = NULL;
 	float		distX, distY;
-	float		lastDistance, distance;
+	float		lastDistance;
 	bool		bFogDisable = false;
 
 	lastDistance = dlight_scale(255);
 
-	for (numLights = 0; numLights < lightAndTextureParams.lightCache->numLights; numLights++)
-	{
-		custom_xyz	vector;
-
-		vector.x = pRNode->motion.x - lightAndTextureParams.lightCache->dLights[numLights].xyz.x;
-		vector.y = pRNode->motion.y - lightAndTextureParams.lightCache->dLights[numLights].xyz.y;
-		vector.z = pRNode->motion.z - lightAndTextureParams.lightCache->dLights[numLights].xyz.z;
-
-		distance = (vector.x * vector.x) + (vector.y * vector.y) +
-			(vector.z * vector.z);
-		distance = (float)sqrt((double)distance);
-
-		distance /= (lightAndTextureParams.lightCache->dLights[numLights].xyzScale.x / 2.0f);
-
-		if (distance < lastDistance)
-		{
-			lastDistance = distance;
-			pDLight = &lightAndTextureParams.lightCache->dLights[numLights];
-		}
-	}
-
-	for (numLights = 0; numLights < lightAndTextureParams.lightCacheDynamic->numLights; numLights++)
-	{
-		custom_xyz	vector;
-
-		vector.x = pRNode->motion.x - lightAndTextureParams.lightCacheDynamic->dLights[numLights].xyz.x;
-		vector.y = pRNode->motion.y - lightAndTextureParams.lightCacheDynamic->dLights[numLights].xyz.y;
-		vector.z = pRNode->motion.z - lightAndTextureParams.lightCacheDynamic->dLights[numLights].xyz.z;
-
-		distance = (vector.x * vector.x) + (vector.y * vector.y) +
-			(vector.z * vector.z);
-		distance = (float)sqrt((double)distance);
-
-		distance /= (lightAndTextureParams.lightCacheDynamic->dLights[numLights].xyzScale.x / 2.0f);
-
-		if (distance < lastDistance)
-		{
-			lastDistance = distance;
-			pDLight = &lightAndTextureParams.lightCacheDynamic->dLights[numLights];
-		}
-	}
+	UpdateClosestLight(lightAndTextureParams.lightCache, pRNode, lastDistance, pDLight);
+	UpdateClosestLight(lightAndTextureParams.lightCacheDynamic, pRNode, lastDistance, pDLight);
+	UpdateClosestLight(lightAndTextureParams.lightCacheFlicker, pRNode, lastDistance, pDLight);
 
 	lastDistance = 1.0f - lastDistance;
 	lastDistance = std::max(0.0f, lastDistance);

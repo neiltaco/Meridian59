@@ -36,6 +36,7 @@ D3DVIEWPORT9			gViewport;
 d3d_render_cache_system	gObjectCacheSystem;
 d3d_render_cache_system	gWorldCacheSystem;
 d3d_render_cache_system	gLMapCacheSystem;
+d3d_render_cache_system	gLMapCacheSystemMoving;
 d3d_render_cache_system	gWorldCacheSystemStatic;
 d3d_render_cache_system	gLMapCacheSystemStatic;
 d3d_render_cache_system	gWallMaskCacheSystem;
@@ -44,6 +45,7 @@ d3d_render_cache_system	gParticleCacheSystem;
 
 d_light_cache			gDLightCache;
 d_light_cache			gDLightCacheDynamic;
+d_light_cache			gDLightCacheFlicker;
 
 d3d_render_pool_new		gObjectPool;
 d3d_render_pool_new		gWorldPool;
@@ -398,6 +400,7 @@ HRESULT D3DRenderInit(HWND hWnd)
 		D3DCOLORWRITEENABLE_BLUE);
 
     D3DCacheSystemInit(&gLMapCacheSystem, gD3DDriverProfile.texMemLMapDynamic);
+    D3DCacheSystemInit(&gLMapCacheSystemMoving, gD3DDriverProfile.texMemLMapDynamic);
     D3DCacheSystemInit(&gLMapCacheSystemStatic, gD3DDriverProfile.texMemLMapStatic);
     D3DRenderPoolInit(&gLMapPool, POOL_SIZE, PACKET_SIZE);
     D3DRenderPoolInit(&gLMapPoolStatic, POOL_SIZE, PACKET_SIZE);
@@ -512,6 +515,7 @@ void D3DRenderShutDown(void)
 	if (config.bDynamicLighting)
 	{
 		D3DCacheSystemShutdown(&gLMapCacheSystem);
+		D3DCacheSystemShutdown(&gLMapCacheSystemMoving);
 		D3DCacheSystemShutdown(&gLMapCacheSystemStatic);
 		D3DRenderPoolShutdown(&gLMapPool);
 		D3DRenderPoolShutdown(&gLMapPoolStatic);
@@ -647,7 +651,8 @@ void D3DRenderBegin(room_type *room, Draw3DParams *params)
 
 	gDLightCache.numLights = 0;
 	gDLightCacheDynamic.numLights = 0;
-	LightCacheUpdateParams lightCacheParams{&gDLightCache, &gDLightCacheDynamic, gD3DRedrawAll};
+	gDLightCacheFlicker.numLights = 0;
+	LightCacheUpdateParams lightCacheParams{&gDLightCache, &gDLightCacheDynamic, &gDLightCacheFlicker, gD3DRedrawAll};
 	D3DLMapsStaticGet(room, lightCacheParams);
 
 	gpD3DDevice->Clear(0, nullptr, (D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL), D3DCOLOR_ARGB(0, 0, 0, 0), 1.0, 0);
@@ -685,6 +690,7 @@ void D3DRenderBegin(room_type *room, Draw3DParams *params)
 
 	D3DCacheSystemReset(&gObjectCacheSystem);
 	D3DCacheSystemReset(&gLMapCacheSystem);
+	D3DCacheSystemReset(&gLMapCacheSystemMoving);
 	D3DCacheSystemReset(&gWorldCacheSystem);
 
 	SetZBias(ZBIAS_DEFAULT);
@@ -713,14 +719,15 @@ void D3DRenderBegin(room_type *room, Draw3DParams *params)
 
 	// Prepare our rendering parameters
 	WorldCacheSystemParams worldCacheSystemParams(&gWorldCacheSystem, &gWorldCacheSystemStatic,
-		&gLMapCacheSystem, &gLMapCacheSystemStatic, &gWallMaskCacheSystem);
+		&gLMapCacheSystem, &gLMapCacheSystemMoving, &gLMapCacheSystemStatic, &gWallMaskCacheSystem);
 
 	WorldPoolParams worldPoolParams(&gWorldPool, &gWorldPoolStatic, &gLMapPool, &gLMapPoolStatic, &gWallMaskPool);
 
 	WorldRenderParams worldRenderParams(g_pVertexDecl_PosColorTex1, g_pVertexDecl_PosColorTex2,
 											gD3DDriverProfile, worldCacheSystemParams, worldPoolParams, view, proj);
 
-	LightAndTextureParams lightAndTextureParams(&gDLightCache, &gDLightCacheDynamic, gSmallTextureSize, sector_depths);
+	LightAndTextureParams lightAndTextureParams(&gDLightCache, &gDLightCacheDynamic, &gDLightCacheFlicker,
+		gSmallTextureSize, sector_depths);
 
 	WorldPropertyParams worldPropertyParams(gpNoLookThrough, D3DRenderLightsGetOrange());
 
