@@ -50,6 +50,10 @@
 	class _OWLCLASS TEdit;
 #endif
 
+#ifndef OWL_COMBOBOX_H
+	class _OWLCLASS TComboBox;
+#endif
+
 #ifndef __wstructs_h
 	#include "wstructs.h"	// Sector
 #endif
@@ -75,10 +79,14 @@ private:
 	char TextureName[MAX_BITMAPNAME + 1];
 	SelPtr SelSectors;
 	TConfirmSectorDialogXfer ConfirmData;
+	SHORT *SlopeVertexList;	// Vertices on this sector's boundary
+	int NumSlopeVertexes;
 
 protected:
 	void SetTextureList();
 	void SetSectorList();
+	void SetVertexLists();
+	int SlopeVertexIndex (SHORT vertex);
 	void SetSector();
         BOOL GetSector();
 	BOOL IsPointInDlgItem (int itemId, TPoint &clientPoint);
@@ -87,6 +95,11 @@ protected:
 public:
 	TSectorEditDialog (TWindow* parent, SelPtr sel, TResId resId = IDD_SECTOR_EDIT, TModule* module = 0);
 	virtual ~TSectorEditDialog ();
+
+	// Preset the floor and ceiling slopes to the given vertices, with
+	// all heights at the sector's flat floor/ceiling heights.  Call
+	// before Execute().
+	void SetSlopePreset (SHORT v1, SHORT v2, SHORT v3);
 
 //{{TSectorEditDialogVIRTUAL_BEGIN}}
 public:
@@ -100,6 +113,8 @@ protected:
 	void FloorClearClicked ();
 	void ToCeilingClicked ();
 	void CeilingClearClicked ();
+	void FloorSlopeClearClicked ();
+	void CeilingSlopeClearClicked ();
 	void SectorSelChange ();
 	void TextureSelChange ();
 	void TextureDblclick ();
@@ -145,9 +160,9 @@ protected:
 	TRadioButton *pScrollSlowRadio;
 	TRadioButton *pScrollMediumRadio;
 	TRadioButton *pScrollFastRadio;
-	TEdit        *pSlopeFloorVertex[3];
+	TComboBox    *pSlopeFloorVertex[3];
 	TEdit        *pSlopeFloorHeight[3];
-	TEdit        *pSlopeCeilingVertex[3];
+	TComboBox    *pSlopeCeilingVertex[3];
 	TEdit        *pSlopeCeilingHeight[3];
 	TEdit        *pFloorAngle;
 	TEdit        *pCeilingAngle;
