@@ -3452,7 +3452,7 @@ void D3DRenderCeilingExtract(BSPnode *pNode, PDIB pDib, custom_xyz *pXYZ, custom
                // light scale is based on dot product of surface normal and sun vector
                lightscale = (long) (pNode->u.leaf.sector->sloped_ceiling->plane.a * sunVect.x +
                                     pNode->u.leaf.sector->sloped_ceiling->plane.b * sunVect.y +
-                                    pNode->u.leaf.sector->sloped_ceiling->plane.a * sunVect.z) >>
+                                    pNode->u.leaf.sector->sloped_ceiling->plane.c * sunVect.z) >>
                             LOG_FINENESS;
 
                lightscale = (lightscale + FINENESS) >> 1;  // map to 0 to 1 range
