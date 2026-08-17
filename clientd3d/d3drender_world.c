@@ -2976,6 +2976,44 @@ int D3DRenderWallExtract(WallData *pWall, PDIB pDib, unsigned int *flags, custom
 }
 
 /**
+ * Returns the texture coordinate, in world units, of a point lying on a sloped floor or
+ * ceiling. The slope's u and v texture axes are perpendicular in 3D, so a signed dot
+ * product against each one yields both the distance and its sign in one step.
+ */
+static custom_st SlopeTextureCoords(const SlopeData *pSlope, const custom_xyz &point)
+{
+   custom_xyz axisU, axisV, offset;
+
+   axisU.x = pSlope->p1.x - pSlope->p0.x;
+   axisU.y = pSlope->p1.y - pSlope->p0.y;
+   axisU.z = pSlope->p1.z - pSlope->p0.z;
+
+   axisV.x = pSlope->p2.x - pSlope->p0.x;
+   axisV.y = pSlope->p2.y - pSlope->p0.y;
+   axisV.z = pSlope->p2.z - pSlope->p0.z;
+
+   float lengthU = sqrtf((axisU.x * axisU.x) + (axisU.y * axisU.y) + (axisU.z * axisU.z));
+   float lengthV = sqrtf((axisV.x * axisV.x) + (axisV.y * axisV.y) + (axisV.z * axisV.z));
+
+   if (lengthU == 0.0f)
+      lengthU = 1.0f;
+
+   if (lengthV == 0.0f)
+      lengthV = 1.0f;
+
+   offset.x = point.x - pSlope->p0.x;
+   offset.y = point.y - pSlope->p0.y;
+   offset.z = point.z - pSlope->p0.z;
+
+   custom_st st;
+
+   st.t = ((offset.x * axisU.x) + (offset.y * axisU.y) + (offset.z * axisU.z)) / lengthU;
+   st.s = -((offset.x * axisV.x) + (offset.y * axisV.y) + (offset.z * axisV.z)) / lengthV;
+
+   return st;
+}
+
+/**
  * Extracts and processes floor data for rendering, generating vertex positions,
  * texture coordinates, and applying lighting effects.
  */
@@ -2986,7 +3024,6 @@ void D3DRenderFloorExtract(BSPnode *pNode, PDIB pDib, custom_xyz *pXYZ, custom_s
    int left, top;
    int paletteIndex;
    float oneOverC, inv128, inv64;
-   custom_xyz intersectTop, intersectLeft;
    long lightscale;
 
    left = top = 0;
@@ -3040,118 +3077,12 @@ void D3DRenderFloorExtract(BSPnode *pNode, PDIB pDib, custom_xyz *pXYZ, custom_s
 
          if (pST)
          {
-            custom_xyz vectorU, vectorV, vector;
-            float U, temp;
-
             if (pSector->sloped_floor)
             {
-               float distance;
-
-               // calc distance from top line (vector u)
-               U = ((pXYZ[count].x - pSector->sloped_floor->p0.x) *
-                    (pSector->sloped_floor->p1.x - pSector->sloped_floor->p0.x)) +
-                   ((pXYZ[count].z - pSector->sloped_floor->p0.z) *
-                    (pSector->sloped_floor->p1.z - pSector->sloped_floor->p0.z)) +
-                   ((pXYZ[count].y - pSector->sloped_floor->p0.y) *
-                    (pSector->sloped_floor->p1.y - pSector->sloped_floor->p0.y));
-               temp = ((pSector->sloped_floor->p1.x - pSector->sloped_floor->p0.x) *
-                       (pSector->sloped_floor->p1.x - pSector->sloped_floor->p0.x)) +
-                      ((pSector->sloped_floor->p1.z - pSector->sloped_floor->p0.z) *
-                       (pSector->sloped_floor->p1.z - pSector->sloped_floor->p0.z)) +
-                      ((pSector->sloped_floor->p1.y - pSector->sloped_floor->p0.y) *
-                       (pSector->sloped_floor->p1.y - pSector->sloped_floor->p0.y));
-
-               if (temp == 0)
-                  temp = 1.0f;
-
-               U /= temp;
-
-               intersectTop.x =
-                   pSector->sloped_floor->p0.x + U * (pSector->sloped_floor->p1.x - pSector->sloped_floor->p0.x);
-               intersectTop.z =
-                   pSector->sloped_floor->p0.z + U * (pSector->sloped_floor->p1.z - pSector->sloped_floor->p0.z);
-               intersectTop.y =
-                   pSector->sloped_floor->p0.y + U * (pSector->sloped_floor->p1.y - pSector->sloped_floor->p0.y);
-
-               pST[count].s = (float) sqrt((pXYZ[count].x - intersectTop.x) * (pXYZ[count].x - intersectTop.x) +
-                                           (pXYZ[count].z - intersectTop.z) * (pXYZ[count].z - intersectTop.z) +
-                                           (pXYZ[count].y - intersectTop.y) * (pXYZ[count].y - intersectTop.y));
-
-               // calc distance from left line (vector v)
-               U = ((pXYZ[count].x - pSector->sloped_floor->p0.x) *
-                    (pSector->sloped_floor->p2.x - pSector->sloped_floor->p0.x)) +
-                   ((pXYZ[count].z - pSector->sloped_floor->p0.z) *
-                    (pSector->sloped_floor->p2.z - pSector->sloped_floor->p0.z)) +
-                   ((pXYZ[count].y - pSector->sloped_floor->p0.y) *
-                    (pSector->sloped_floor->p2.y - pSector->sloped_floor->p0.y));
-               temp = ((pSector->sloped_floor->p2.x - pSector->sloped_floor->p0.x) *
-                       (pSector->sloped_floor->p2.x - pSector->sloped_floor->p0.x)) +
-                      ((pSector->sloped_floor->p2.z - pSector->sloped_floor->p0.z) *
-                       (pSector->sloped_floor->p2.z - pSector->sloped_floor->p0.z)) +
-                      ((pSector->sloped_floor->p2.y - pSector->sloped_floor->p0.y) *
-                       (pSector->sloped_floor->p2.y - pSector->sloped_floor->p0.y));
-
-               if (temp == 0)
-                  temp = 1.0f;
-
-               U /= temp;
-
-               intersectLeft.x =
-                   pSector->sloped_floor->p0.x + U * (pSector->sloped_floor->p2.x - pSector->sloped_floor->p0.x);
-               intersectLeft.z =
-                   pSector->sloped_floor->p0.z + U * (pSector->sloped_floor->p2.z - pSector->sloped_floor->p0.z);
-               intersectLeft.y =
-                   pSector->sloped_floor->p0.y + U * (pSector->sloped_floor->p2.y - pSector->sloped_floor->p0.y);
-
-               pST[count].t = (float) sqrt((pXYZ[count].x - intersectLeft.x) * (pXYZ[count].x - intersectLeft.x) +
-                                           (pXYZ[count].z - intersectLeft.z) * (pXYZ[count].z - intersectLeft.z) +
-                                           (pXYZ[count].y - intersectLeft.y) * (pXYZ[count].y - intersectLeft.y));
+               pST[count] = SlopeTextureCoords(pSector->sloped_floor, pXYZ[count]);
 
                pST[count].s += pSector->ty / 2.0f;
                pST[count].t += pSector->tx / 2.0f;
-
-               vectorU.x = pSector->sloped_floor->p1.x - pSector->sloped_floor->p0.x;
-               vectorU.z = pSector->sloped_floor->p1.z - pSector->sloped_floor->p0.z;
-               vectorU.y = pSector->sloped_floor->p1.y - pSector->sloped_floor->p0.y;
-
-               distance = (float) sqrt((vectorU.x * vectorU.x) + (vectorU.y * vectorU.y));
-
-               if (distance == 0)
-                  distance = 1.0f;
-
-               vectorU.x /= distance;
-               vectorU.z /= distance;
-               vectorU.y /= distance;
-
-               vectorV.x = pSector->sloped_floor->p2.x - pSector->sloped_floor->p0.x;
-               vectorV.z = pSector->sloped_floor->p2.z - pSector->sloped_floor->p0.z;
-               vectorV.y = pSector->sloped_floor->p2.y - pSector->sloped_floor->p0.y;
-
-               distance = (float) sqrt((vectorV.x * vectorV.x) + (vectorV.y * vectorV.y));
-
-               if (distance == 0)
-                  distance = 1.0f;
-
-               vectorV.x /= distance;
-               vectorV.z /= distance;
-               vectorV.y /= distance;
-
-               vector.x = pXYZ[count].x - pSector->sloped_floor->p0.x;
-               vector.y = pXYZ[count].y - pSector->sloped_floor->p0.y;
-
-               distance = (float) sqrt((vector.x * vector.x) + (vector.y * vector.y));
-
-               if (distance == 0)
-                  distance = 1.0f;
-
-               vector.x /= distance;
-               vector.y /= distance;
-
-               if (((vector.x * vectorU.x) + (vector.y * vectorU.y)) <= 0)
-                  pST[count].t = -pST[count].t;
-
-               if (((vector.x * vectorV.x) + (vector.y * vectorV.y)) > 0)
-                  pST[count].s = -pST[count].s;
             }
             else
             {
@@ -3246,7 +3177,6 @@ void D3DRenderCeilingExtract(BSPnode *pNode, PDIB pDib, custom_xyz *pXYZ, custom
    int left, top;
    int paletteIndex;
    float oneOverC, inv128, inv64;
-   custom_xyz intersectTop, intersectLeft;
    long lightscale;
 
    left = top = 0;
@@ -3293,115 +3223,9 @@ void D3DRenderCeilingExtract(BSPnode *pNode, PDIB pDib, custom_xyz *pXYZ, custom
 
          if (pST)
          {
-            custom_xyz vectorU, vectorV, vector;
-            float U, temp;
-
             if (pSector->sloped_ceiling)
             {
-               float distance;
-
-               // calc distance from top line (vector u)
-               U = ((pXYZ[count].x - pSector->sloped_ceiling->p0.x) *
-                    (pSector->sloped_ceiling->p1.x - pSector->sloped_ceiling->p0.x)) +
-                   ((pXYZ[count].z - pSector->sloped_ceiling->p0.z) *
-                    (pSector->sloped_ceiling->p1.z - pSector->sloped_ceiling->p0.z)) +
-                   ((pXYZ[count].y - pSector->sloped_ceiling->p0.y) *
-                    (pSector->sloped_ceiling->p1.y - pSector->sloped_ceiling->p0.y));
-               temp = ((pSector->sloped_ceiling->p1.x - pSector->sloped_ceiling->p0.x) *
-                       (pSector->sloped_ceiling->p1.x - pSector->sloped_ceiling->p0.x)) +
-                      ((pSector->sloped_ceiling->p1.z - pSector->sloped_ceiling->p0.z) *
-                       (pSector->sloped_ceiling->p1.z - pSector->sloped_ceiling->p0.z)) +
-                      ((pSector->sloped_ceiling->p1.y - pSector->sloped_ceiling->p0.y) *
-                       (pSector->sloped_ceiling->p1.y - pSector->sloped_ceiling->p0.y));
-
-               if (temp == 0)
-                  temp = 1.0f;
-
-               U /= temp;
-
-               intersectTop.x =
-                   pSector->sloped_ceiling->p0.x + U * (pSector->sloped_ceiling->p1.x - pSector->sloped_ceiling->p0.x);
-               intersectTop.z =
-                   pSector->sloped_ceiling->p0.z + U * (pSector->sloped_ceiling->p1.z - pSector->sloped_ceiling->p0.z);
-               intersectTop.y =
-                   pSector->sloped_ceiling->p0.y + U * (pSector->sloped_ceiling->p1.y - pSector->sloped_ceiling->p0.y);
-
-               pST[count].s = (float) sqrt((pXYZ[count].x - intersectTop.x) * (pXYZ[count].x - intersectTop.x) +
-                                           (pXYZ[count].z - intersectTop.z) * (pXYZ[count].z - intersectTop.z) +
-                                           (pXYZ[count].y - intersectTop.y) * (pXYZ[count].y - intersectTop.y));
-
-               // calc distance from left line (vector v)
-               U = ((pXYZ[count].x - pSector->sloped_ceiling->p0.x) *
-                    (pSector->sloped_ceiling->p2.x - pSector->sloped_ceiling->p0.x)) +
-                   ((pXYZ[count].z - pSector->sloped_ceiling->p0.z) *
-                    (pSector->sloped_ceiling->p2.z - pSector->sloped_ceiling->p0.z)) +
-                   ((pXYZ[count].y - pSector->sloped_ceiling->p0.y) *
-                    (pSector->sloped_ceiling->p2.y - pSector->sloped_ceiling->p0.y));
-               temp = ((pSector->sloped_ceiling->p2.x - pSector->sloped_ceiling->p0.x) *
-                       (pSector->sloped_ceiling->p2.x - pSector->sloped_ceiling->p0.x)) +
-                      ((pSector->sloped_ceiling->p2.z - pSector->sloped_ceiling->p0.z) *
-                       (pSector->sloped_ceiling->p2.z - pSector->sloped_ceiling->p0.z)) +
-                      ((pSector->sloped_ceiling->p2.y - pSector->sloped_ceiling->p0.y) *
-                       (pSector->sloped_ceiling->p2.y - pSector->sloped_ceiling->p0.y));
-
-               if (temp == 0)
-                  temp = 1.0f;
-
-               U /= temp;
-
-               intersectLeft.x =
-                   pSector->sloped_ceiling->p0.x + U * (pSector->sloped_ceiling->p2.x - pSector->sloped_ceiling->p0.x);
-               intersectLeft.z =
-                   pSector->sloped_ceiling->p0.z + U * (pSector->sloped_ceiling->p2.z - pSector->sloped_ceiling->p0.z);
-               intersectLeft.y =
-                   pSector->sloped_ceiling->p0.y + U * (pSector->sloped_ceiling->p2.y - pSector->sloped_ceiling->p0.y);
-
-               pST[count].t = (float) sqrt((pXYZ[count].x - intersectLeft.x) * (pXYZ[count].x - intersectLeft.x) +
-                                           (pXYZ[count].z - intersectLeft.z) * (pXYZ[count].z - intersectLeft.z) +
-                                           (pXYZ[count].y - intersectLeft.y) * (pXYZ[count].y - intersectLeft.y));
-
-               vectorU.x = pSector->sloped_ceiling->p1.x - pSector->sloped_ceiling->p0.x;
-               vectorU.z = pSector->sloped_ceiling->p1.z - pSector->sloped_ceiling->p0.z;
-               vectorU.y = pSector->sloped_ceiling->p1.y - pSector->sloped_ceiling->p0.y;
-
-               distance = (float) sqrt((vectorU.x * vectorU.x) + (vectorU.y * vectorU.y));
-
-               if (distance == 0)
-                  distance = 1.0f;
-
-               vectorU.x /= distance;
-               vectorU.z /= distance;
-               vectorU.y /= distance;
-
-               vectorV.x = pSector->sloped_ceiling->p2.x - pSector->sloped_ceiling->p0.x;
-               vectorV.z = pSector->sloped_ceiling->p2.z - pSector->sloped_ceiling->p0.z;
-               vectorV.y = pSector->sloped_ceiling->p2.y - pSector->sloped_ceiling->p0.y;
-
-               distance = (float) sqrt((vectorV.x * vectorV.x) + (vectorV.y * vectorV.y));
-
-               if (distance == 0)
-                  distance = 1.0f;
-
-               vectorV.x /= distance;
-               vectorV.z /= distance;
-               vectorV.y /= distance;
-
-               vector.x = pXYZ[count].x - pSector->sloped_ceiling->p0.x;
-               vector.y = pXYZ[count].y - pSector->sloped_ceiling->p0.y;
-
-               distance = (float) sqrt((vector.x * vector.x) + (vector.y * vector.y));
-
-               if (distance == 0)
-                  distance = 1.0f;
-
-               vector.x /= distance;
-               vector.y /= distance;
-
-               if (((vector.x * vectorU.x) + (vector.y * vectorU.y)) < 0)
-                  pST[count].t = -pST[count].t;
-
-               if (((vector.x * vectorV.x) + (vector.y * vectorV.y)) > 0)
-                  pST[count].s = -pST[count].s;
+               pST[count] = SlopeTextureCoords(pSector->sloped_ceiling, pXYZ[count]);
 
                pST[count].s -= pSector->ty / 2.0f;
                pST[count].t -= pSector->tx / 2.0f;
