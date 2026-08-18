@@ -68,14 +68,11 @@ struct WorldPoolParams {
 };
 
 struct WorldPropertyParams {
-    
-    LPDIRECT3DTEXTURE9 noLookThroughTexture;
-    LPDIRECT3DTEXTURE9 lightOrangeTexture;
 
-	WorldPropertyParams(LPDIRECT3DTEXTURE9 noLookThroughTextureParam,
-        LPDIRECT3DTEXTURE9 lightOrangeTextureParam)
-		: noLookThroughTexture(noLookThroughTextureParam),
-		  lightOrangeTexture(lightOrangeTextureParam)
+    LPDIRECT3DTEXTURE9 noLookThroughTexture;
+
+	WorldPropertyParams(LPDIRECT3DTEXTURE9 noLookThroughTextureParam)
+		: noLookThroughTexture(noLookThroughTextureParam)
 	{}
 };
 

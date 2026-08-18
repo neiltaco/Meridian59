@@ -30,10 +30,6 @@ void D3DRenderPacketCeilingAdd(BSPnode *pNode, d3d_render_pool_new *pPool, bool 
 
 void D3DRenderPacketWallMaskAdd(WallData *pWall, d3d_render_pool_new *pPool, LPDIRECT3DTEXTURE9 noLookThrough,
                                 unsigned int type, int side, bool dynamic);
-void D3DRenderFloorMaskAdd(BSPnode *pNode, d3d_render_pool_new *pPool, LPDIRECT3DTEXTURE9 noLookThroughTexture,
-                           bool bDynamic);
-void D3DRenderCeilingMaskAdd(BSPnode *pNode, d3d_render_pool_new *pPool, LPDIRECT3DTEXTURE9 noLookThrough,
-                             LPDIRECT3DTEXTURE9 lightOrangeTexture, bool bDynamic);
 
 void D3DRenderLMapPostFloorAdd(BSPnode *pNode, d3d_render_pool_new *pPool, d_light_cache *pDLightCache, bool bDynamic);
 void D3DRenderLMapPostCeilingAdd(BSPnode *pNode, d3d_render_pool_new *pPool, d_light_cache *pDLightCache,
@@ -47,6 +43,8 @@ int D3DRenderWallExtract(WallData *pWall, PDIB pDib, unsigned int *flags, custom
                          custom_bgra *pBGRA, unsigned int type, int side);
 
 void D3DRenderSemiTransparentWalls(const WorldRenderParams &worldRenderParams);
+
+void D3DRenderNoLookThroughMask(const WorldRenderParams &worldRenderParams);
 
 // Implementations
 
@@ -137,6 +135,8 @@ long D3DRenderWorld(const WorldRenderParams &worldRenderParams, const WorldPrope
    auto &cacheSystem = worldRenderParams.cacheSystemParams;
    auto &pools = worldRenderParams.poolParams;
 
+   D3DRenderNoLookThroughMask(worldRenderParams);
+
    D3DRenderPoolReset(pools.worldPool, &D3DMaterialWorldPool);
    D3DCacheSystemReset(cacheSystem.worldCacheSystem);
    D3DRenderWorldDraw(worldRenderParams, false);  // Non-transparent objects pass
@@ -173,6 +173,38 @@ long D3DRenderWorld(const WorldRenderParams &worldRenderParams, const WorldPrope
    D3DRender_SetAlphaTestState(FALSE, alpha_test_threshold, D3DCMP_GREATEREQUAL);
 
    return timeWorld;
+}
+
+/**
+ * Seals walls flagged WF_NOLOOKTHROUGH against everything behind them, the way the
+ * software renderer does by filling the whole column with the background and ending it.
+ *
+ * The wall is given depth but no colour, so the sky already in the frame buffer survives
+ * where the wall does not paint over it and anything further away fails the depth test.
+ * Alpha testing stays off so the seal covers the textured parts too, which is what lets a
+ * translucent wall blend against the background instead of the room beyond. Relying on the
+ * frame buffer that way, this has to run after the sky and before any world geometry.
+ */
+void D3DRenderNoLookThroughMask(const WorldRenderParams &worldRenderParams)
+{
+   auto &cacheSystem = worldRenderParams.cacheSystemParams;
+   auto &pools = worldRenderParams.poolParams;
+
+   // Blending is deliberately untouched: colour writes are off, and the world pass that
+   // follows depends on the state it came in with.
+   D3DRender_SetAlphaTestState(FALSE, alpha_test_threshold, D3DCMP_GREATEREQUAL);
+   IDirect3DDevice9_SetRenderState(gpD3DDevice, D3DRS_COLORWRITEENABLE, 0);
+
+   D3DCacheFlush(cacheSystem.wallMaskCacheSystem, pools.wallMaskPool, 1, D3DPT_TRIANGLESTRIP);
+
+   IDirect3DDevice9_SetRenderState(gpD3DDevice, D3DRS_COLORWRITEENABLE,
+                                   D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN |
+                                       D3DCOLORWRITEENABLE_BLUE);
+   D3DRender_SetAlphaTestState(TRUE, alpha_test_threshold, D3DCMP_GREATEREQUAL);
+
+   // Mask chunks set their own culling and depth bias; restore what the world expects.
+   IDirect3DDevice9_SetRenderState(gpD3DDevice, D3DRS_CULLMODE, D3DCULL_CW);
+   SetZBias(ZBIAS_WORLD);
 }
 
 /**
@@ -1119,8 +1151,6 @@ void D3DRenderPacketWallMaskAdd(WallData *pWall, d3d_render_pool_new *pPool, uns
    unsigned int flags;
    PDIB pDib;
    int vertex;
-   bool bNoVTile = false;
-   bool bNoLookThrough = false;
 
    d3d_render_packet_new *pPacket;
    d3d_render_chunk_new *pChunk;
@@ -1195,30 +1225,14 @@ void D3DRenderPacketWallMaskAdd(WallData *pWall, d3d_render_pool_new *pPool, uns
       }
    }
 
-   if (pWall->pos_sidedef)
-   {
-      if (pWall->pos_sidedef->flags & WF_NO_VTILE)
-         bNoVTile = true;
-      if (pWall->pos_sidedef->flags & WF_NOLOOKTHROUGH)
-         bNoLookThrough = true;
-   }
-
-   if (pWall->neg_sidedef)
-   {
-      if (pWall->neg_sidedef->flags & WF_NO_VTILE)
-         bNoVTile = true;
-      if (pWall->neg_sidedef->flags & WF_NOLOOKTHROUGH)
-         bNoLookThrough = true;
-   }
-
    if (NULL == pDib)
       return;
 
+   // Only the side carrying the flag hides what lies behind it.
    if ((pSideDef->flags & WF_NOLOOKTHROUGH) == 0)
-   {
-      if (!bNoLookThrough || !bNoVTile)
-         return;
-   }
+      return;
+
+   const bool bNoVTile = (pSideDef->flags & WF_NO_VTILE) != 0;
 
    D3DRenderWallExtract(pWall, pDib, &flags, xyz, st, bgra, type, side);
 
@@ -1365,7 +1379,9 @@ void D3DRenderPacketWallMaskAdd(WallData *pWall, d3d_render_pool_new *pPool, uns
       pChunk->pSectorPos = pWall->pos_sector;
       pChunk->pSectorNeg = pWall->neg_sector;
       pChunk->side = side;
-      pChunk->zBias = ZBIAS_WORLD + 1;
+      // Behind the world like every other mask quad, so it only fills where the world
+      // draws nothing.
+      pChunk->zBias = ZBIAS_MASK;
 
       if (bNoVTile)
          pChunk->flags |= D3DRENDER_NOCULL;
@@ -1393,202 +1409,6 @@ void D3DRenderPacketWallMaskAdd(WallData *pWall, d3d_render_pool_new *pPool, uns
       pChunk->indices[1] = 2;
       pChunk->indices[2] = 0;
       pChunk->indices[3] = 3;
-   }
-}
-
-/*
- * Add a floor mask to the render pool
- */
-void D3DRenderFloorMaskAdd(BSPnode *pNode, d3d_render_pool_new *pPool, LPDIRECT3DTEXTURE9 noLookThroughTexture,
-                           bool bDynamic)
-{
-   Sector *pSector = pNode->u.leaf.sector;
-   custom_xyz xyz[MAX_NPTS];
-   custom_bgra bgra[MAX_NPTS];
-   int vertex;
-
-   d3d_render_packet_new *pPacket;
-   d3d_render_chunk_new *pChunk;
-
-   D3DRenderFloorExtract(pNode, NULL, xyz, NULL, bgra);
-
-   pPacket = D3DRenderPacketFindMatch(pPool, noLookThroughTexture, NULL, 0, 0, 0);
-   if (NULL == pPacket)
-      return;
-   pChunk = D3DRenderChunkNew(pPacket);
-   assert(pChunk);
-
-   pChunk->numVertices = pNode->u.leaf.poly.npts;
-   pChunk->numIndices = pChunk->numVertices;
-   pChunk->numPrimitives = pChunk->numVertices - 2;
-   pChunk->pSector = pSector;
-   pChunk->zBias = ZBIAS_MASK;
-
-   pPacket->pMaterialFctn = &D3DMaterialWorldPacket;
-
-   pChunk->pMaterialFctn = &D3DMaterialMaskChunk;
-
-   for (vertex = 0; vertex < pNode->u.leaf.poly.npts; vertex++)
-   {
-      pChunk->xyz[vertex].x = xyz[vertex].x;
-      pChunk->xyz[vertex].y = xyz[vertex].y;
-      pChunk->xyz[vertex].z = xyz[vertex].z;
-
-      pChunk->bgra[vertex].b = bgra[vertex].b;
-      pChunk->bgra[vertex].g = bgra[vertex].g;
-      pChunk->bgra[vertex].r = bgra[vertex].r;
-      pChunk->bgra[vertex].a = bgra[vertex].a;
-   }
-
-   {
-      u_int index;
-      int first, last;
-
-      first = 1;
-      last = pChunk->numVertices - 1;
-
-      pChunk->indices[0] = 0;
-      pChunk->indices[1] = last--;
-      pChunk->indices[2] = first++;
-
-      for (index = 3; index < pChunk->numIndices; first++, last--, index += 2)
-      {
-         pChunk->indices[index] = last;
-         pChunk->indices[index + 1] = first;
-      }
-   }
-}
-
-/*
- * Add a ceiling mask to the render pool
- */
-void D3DRenderCeilingMaskAdd(BSPnode *pNode, d3d_render_pool_new *pPool, LPDIRECT3DTEXTURE9 noLookThroughTexture,
-                             LPDIRECT3DTEXTURE9 lightOrangeTexture, bool bDynamic)
-{
-   Sector *pSector = pNode->u.leaf.sector;
-   custom_xyz xyz[MAX_NPTS];
-   custom_bgra bgra[MAX_NPTS];
-   int vertex;
-   int left, top;
-
-   d3d_render_packet_new *pPacket;
-   d3d_render_chunk_new *pChunk;
-
-   left = top = 0;
-
-   D3DRenderCeilingExtract(pNode, NULL, xyz, NULL, bgra);
-
-   pPacket = D3DRenderPacketFindMatch(pPool, noLookThroughTexture, NULL, 0, 0, 0);
-   if (NULL == pPacket)
-      return;
-   pChunk = D3DRenderChunkNew(pPacket);
-   assert(pChunk);
-
-   pChunk->numVertices = pNode->u.leaf.poly.npts;
-   pChunk->numIndices = pChunk->numVertices;
-   pChunk->numPrimitives = pChunk->numVertices - 2;
-   pChunk->pSector = pSector;
-   pChunk->zBias = ZBIAS_MASK;
-
-   pPacket->pMaterialFctn = &D3DMaterialWorldPacket;
-
-   pChunk->pMaterialFctn = &D3DMaterialMaskChunk;
-
-   for (vertex = 0; vertex < pNode->u.leaf.poly.npts; vertex++)
-   {
-      pChunk->xyz[vertex].x = xyz[vertex].x;
-      pChunk->xyz[vertex].y = xyz[vertex].y;
-      pChunk->xyz[vertex].z = xyz[vertex].z;
-
-      pChunk->bgra[vertex].b = bgra[vertex].b;
-      pChunk->bgra[vertex].g = bgra[vertex].g;
-      pChunk->bgra[vertex].r = bgra[vertex].r;
-      pChunk->bgra[vertex].a = bgra[vertex].a;
-   }
-
-   {
-      u_int index;
-      int first, last;
-
-      first = 1;
-      last = pChunk->numVertices - 1;
-
-      pChunk->indices[0] = 0;
-      pChunk->indices[1] = first++;
-      pChunk->indices[2] = last--;
-
-      for (index = 3; index < pChunk->numIndices; first++, last--, index += 2)
-      {
-         pChunk->indices[index] = first;
-         pChunk->indices[index + 1] = last;
-      }
-   }
-
-   const auto &current_room = getCurrentRoom();
-
-   if ((pSector->sloped_ceiling == NULL) && (pSector->ceiling_height != current_room.sectors[0].ceiling_height))
-   {
-      int vertex, i;
-
-      pPacket = D3DRenderPacketFindMatch(pPool, lightOrangeTexture, NULL, 0, 0, 0);
-      if (NULL == pPacket)
-         return;
-      pChunk = D3DRenderChunkNew(pPacket);
-      assert(pChunk);
-
-      pPacket->pMaterialFctn = &D3DMaterialWorldPacket;
-
-      for (i = 0, vertex = 0; i < pNode->u.leaf.poly.npts; i++)
-      {
-         if (vertex >= MAX_NPTS)
-         {
-            pChunk = D3DRenderChunkNew(pPacket);
-            vertex = 0;
-            pChunk->numVertices = 20;
-            pChunk->numIndices = pChunk->numVertices;
-            pChunk->numPrimitives = pChunk->numVertices - 2;
-            pChunk->pSector = pSector;
-            pChunk->zBias = 0;
-            pChunk->flags = D3DRENDER_NOCULL;
-
-            pChunk->pMaterialFctn = &D3DMaterialMaskChunk;
-         }
-
-         pChunk->xyz[vertex].x = xyz[i].x;
-         pChunk->xyz[vertex].y = xyz[i].y;
-         pChunk->xyz[vertex].z = xyz[i].z;
-
-         pChunk->bgra[vertex].b = bgra[i].b;
-         pChunk->bgra[vertex].g = bgra[i].g;
-         pChunk->bgra[vertex].r = bgra[i].r;
-         pChunk->bgra[vertex].a = bgra[i].a;
-
-         pChunk->indices[vertex] = vertex;
-
-         vertex++;
-
-         pChunk->xyz[vertex].x = xyz[i].x;
-         pChunk->xyz[vertex].y = xyz[i].y;
-         pChunk->xyz[vertex].z = 65535;
-
-         pChunk->bgra[vertex].b = bgra[i].b;
-         pChunk->bgra[vertex].g = bgra[i].g;
-         pChunk->bgra[vertex].r = bgra[i].r;
-         pChunk->bgra[vertex].a = bgra[i].a;
-
-         pChunk->indices[vertex] = vertex;
-
-         vertex++;
-      }
-
-      pChunk->numVertices = vertex - 1;
-      pChunk->numIndices = pChunk->numVertices;
-      pChunk->numPrimitives = pChunk->numVertices - 2;
-      pChunk->pSector = pSector;
-      pChunk->zBias = 0;
-      pChunk->flags = D3DRENDER_NOCULL;
-
-      pChunk->pMaterialFctn = &D3DMaterialMaskChunk;
    }
 }
 
@@ -2389,24 +2209,23 @@ void D3DGeometryBuildNew(const WorldRenderParams &worldRenderParams, const World
       D3DCacheFill(cacheSystem.lMapCacheSystemStatic, pools.lMapPoolStatic, 2);
    }
 
-   for (count = 0; count < room.num_nodes; count++)
+   // Masks are the same in both passes, so build them once; doing it in both would leave
+   // two copies of every quad in the pool.
+   if (!transparent_pass)
    {
-      pNode = &room.nodes[count];
-
-      switch (pNode->type)
+      for (count = 0; count < room.num_nodes; count++)
       {
-      case BSPinternaltype:
+         pNode = &room.nodes[count];
+
+         if (pNode->type != BSPinternaltype)
+            continue;
+
          for (pWall = pNode->u.internal.walls_in_plane; pWall != NULL; pWall = pWall->next)
          {
-            int flags, wallFlags;
-
-            flags = 0;
-            wallFlags = 0;
+            int flags = 0;
 
             if (pWall->pos_sidedef)
             {
-               wallFlags |= pWall->pos_sidedef->flags;
-
                if (pWall->pos_sidedef->normal_bmap)
                   flags |= D3DRENDER_WALL_NORMAL;
 
@@ -2419,8 +2238,6 @@ void D3DGeometryBuildNew(const WorldRenderParams &worldRenderParams, const World
 
             if (pWall->neg_sidedef)
             {
-               wallFlags |= pWall->neg_sidedef->flags;
-
                if (pWall->neg_sidedef->normal_bmap)
                   flags |= D3DRENDER_WALL_NORMAL;
 
@@ -2458,24 +2275,12 @@ void D3DGeometryBuildNew(const WorldRenderParams &worldRenderParams, const World
                                           worldPropertyParams.noLookThroughTexture, false);
             }
          }
-
-         break;
-
-      case BSPleaftype:
-         if ((pNode->u.leaf.sector->ceiling == NULL) && (pNode->u.leaf.sector->sloped_floor == NULL))
-            D3DRenderCeilingMaskAdd(pNode, pools.wallMaskPool, worldPropertyParams.noLookThroughTexture,
-                                    worldPropertyParams.lightOrangeTexture, false);
-         break;
-
-      default:
-         break;
       }
-   }
 
-   {
-      D3DCacheFill(cacheSystem.worldCacheSystemStatic, pools.worldPoolStatic, 1);
       D3DCacheFill(cacheSystem.wallMaskCacheSystem, pools.wallMaskPool, 1);
    }
+
+   D3DCacheFill(cacheSystem.worldCacheSystemStatic, pools.worldPoolStatic, 1);
 }
 
 /*

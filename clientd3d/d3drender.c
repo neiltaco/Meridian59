@@ -495,6 +495,16 @@ HRESULT D3DRenderInit(HWND hWnd)
 	gpD3DDevice->CreateTexture(gFullTextureSize, gFullTextureSize, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8,
 									D3DPOOL_DEFAULT, &gpBackBufferTexFull, nullptr);
 
+	// A wall texture set not to tile vertically leaves a gap above it, which the no look
+	// through pass fills with a quad of its own. That quad has no texture to be drawn with,
+	// so it borrows this one; the pass writes depth only, so this texel is never seen.
+	gpD3DDevice->CreateTexture(1, 1, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &gpNoLookThrough, nullptr);
+
+	D3DLOCKED_RECT lockedRect;
+	gpNoLookThrough->LockRect(0, &lockedRect, nullptr, 0);
+	*static_cast<DWORD *>(lockedRect.pBits) = 0;
+	gpNoLookThrough->UnlockRect(0);
+
 	/***************************************************************************/
 	/*                                FONT                                     */
 	/***************************************************************************/
@@ -729,7 +739,7 @@ void D3DRenderBegin(room_type *room, Draw3DParams *params)
 	LightAndTextureParams lightAndTextureParams(&gDLightCache, &gDLightCacheDynamic, &gDLightCacheFlicker,
 		gSmallTextureSize, sector_depths);
 
-	WorldPropertyParams worldPropertyParams(gpNoLookThrough, D3DRenderLightsGetOrange());
+	WorldPropertyParams worldPropertyParams(gpNoLookThrough);
 
 	// Perform a requested static cache rebuild only if invert effect isn't active.
 	// GetLightPaletteIndex returns PALETTE_INVERT during the flash effect, which would
